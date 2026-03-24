@@ -1,0 +1,610 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Audio Oscilloscope</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: #0a0a0f;
+        color: #0ff;
+        font-family: monospace;
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        overflow: hidden;
+      }
+      header {
+        padding: 15px;
+        background: #141419;
+        border-bottom: 1px solid #0ff;
+      }
+      canvas {
+        flex: 1;
+        display: block;
+        width: 100%;
+      }
+      .controls {
+        padding: 15px;
+        background: #141419;
+        border-top: 1px solid #0ff;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      button,
+      select {
+        padding: 10px 20px;
+        background: #0a0a0f;
+        border: 1px solid #0ff;
+        color: #0ff;
+        cursor: pointer;
+        font-family: monospace;
+      }
+      button:hover {
+        background: #0ff;
+        color: #0a0a0f;
+      }
+      button:disabled {
+        opacity: 0.3;
+        cursor: not-allowed;
+      }
+      input[type="color"] {
+        width: 50px;
+        height: 40px;
+        border: 1px solid #0ff;
+        background: #0a0a0f;
+        cursor: pointer;
+      }
+      input[type="checkbox"] {
+        cursor: pointer;
+      }
+      label {
+        color: #0ff;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>AUDIO OSCILLOSCOPE</h1>
+    </header>
+
+    <canvas id="canvas"></canvas>
+
+    <div class="controls">
+      <button type="button" id="micBtn">MIC</button>
+      <button type="button" id="fileBtn">UPLOAD FILE</button>
+      <input
+        type="file"
+        id="fileInput"
+        accept="audio/*"
+        style="display: none"
+      />
+      <button type="button" id="playBtn" disabled>PLAY</button>
+      <button type="button" id="stopBtn" disabled>STOP</button>
+      <select id="mode">
+        <option value="wave">OSCILLOSCOPE</option>
+        <option value="bars">BARS</option>
+        <option value="circle">CIRCLE</option>
+        <option value="particles">PARTICLES</option>
+      </select>
+      <label style="display: flex; align-items: center; gap: 5px">
+        <input type="checkbox" id="gradient" /> GRADIENT
+      </label>
+      <div
+        id="colorContainer"
+        style="display: flex; gap: 5px; flex-wrap: wrap"
+      ></div>
+      <button type="button" id="addColorBtn">+ COLOR</button>
+    </div>
+
+    <div
+      id="particleControls"
+      class="controls"
+      style="display: none; border-top: 1px solid #0ff"
+    >
+      <label style="display: flex; align-items: center; gap: 5px">
+        <input type="checkbox" id="particleInteractive" checked /> Interactive
+      </label>
+      <label style="display: flex; align-items: center; gap: 5px">
+        <input type="checkbox" id="particleConnections" checked /> Connections
+      </label>
+      <label style="display: flex; align-items: center; gap: 5px">
+        <input type="checkbox" id="particleMouse" /> Follow Mouse
+      </label>
+      <label
+        style="display: flex; align-items: center; gap: 5px; min-width: 200px"
+      >
+        Count:
+        <input
+          type="range"
+          id="particleCount"
+          min="20"
+          max="200"
+          value="100"
+          style="flex: 1"
+        />
+        <span id="particleCountLabel">100</span>
+      </label>
+    </div>
+
+    <script>
+      "use strict";
+
+      console.log("Script starting...");
+
+      // Prevent any navigation
+      window.onbeforeunload = null;
+
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d");
+      const micBtn = document.getElementById("micBtn");
+      const fileBtn = document.getElementById("fileBtn");
+      const fileInput = document.getElementById("fileInput");
+      const playBtn = document.getElementById("playBtn");
+      const stopBtn = document.getElementById("stopBtn");
+      const modeSelect = document.getElementById("mode");
+      const gradientCheck = document.getElementById("gradient");
+      const colorContainer = document.getElementById("colorContainer");
+      const addColorBtn = document.getElementById("addColorBtn");
+      const particleControls = document.getElementById("particleControls");
+      const particleInteractive = document.getElementById(
+        "particleInteractive",
+      );
+      const particleConnections = document.getElementById(
+        "particleConnections",
+      );
+      const particleMouse = document.getElementById("particleMouse");
+      const particleCount = document.getElementById("particleCount");
+      const particleCountLabel = document.getElementById("particleCountLabel");
+
+      let audioCtx,
+        analyser,
+        dataArray,
+        bufferLen,
+        source,
+        audio,
+        micStream,
+        animId;
+      let mode = "wave";
+      let isPlaying = false;
+      let useGradient = false;
+      let particles = [];
+      let colors = ["#00ffff", "#ff00ff", "#ffff00"];
+      let mouseX = 0;
+      let mouseY = 0;
+      let particleSettings = {
+        interactive: true,
+        connections: true,
+        followMouse: false,
+        count: 100,
+      };
+
+      function resize() {
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
+      }
+      resize();
+      window.onresize = resize;
+
+      function createColorPicker(color) {
+        const wrapper = document.createElement("div");
+        wrapper.style.cssText =
+          "display:flex; align-items:center; gap:3px; background:#141419; padding:3px; border:1px solid #0ff;";
+
+        const input = document.createElement("input");
+        input.type = "color";
+        input.value = color;
+        input.onchange = function () {
+          const idx = Array.from(colorContainer.children).indexOf(wrapper);
+          colors[idx] = this.value;
+          if (mode === "particles") initParticles();
+        };
+
+        const removeBtn = document.createElement("button");
+        removeBtn.textContent = "×";
+        removeBtn.type = "button";
+        removeBtn.style.cssText =
+          "padding:2px 6px; min-width:auto; font-size:16px;";
+        removeBtn.onclick = function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (colors.length > 1) {
+            const idx = Array.from(colorContainer.children).indexOf(wrapper);
+            colors.splice(idx, 1);
+            wrapper.remove();
+            if (mode === "particles") initParticles();
+          }
+          return false;
+        };
+
+        wrapper.appendChild(input);
+        wrapper.appendChild(removeBtn);
+        colorContainer.appendChild(wrapper);
+      }
+
+      function initColors() {
+        colorContainer.innerHTML = "";
+        colors.forEach((color) => createColorPicker(color));
+      }
+
+      function initParticles() {
+        particles = [];
+        for (let i = 0; i < particleSettings.count; i++) {
+          particles.push({
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height,
+            vx: (Math.random() - 0.5) * 2,
+            vy: (Math.random() - 0.5) * 2,
+            radius: Math.random() * 3 + 1,
+            color: colors[Math.floor(Math.random() * colors.length)],
+          });
+        }
+      }
+
+      canvas.addEventListener("mousemove", function (e) {
+        const rect = canvas.getBoundingClientRect();
+        mouseX = e.clientX - rect.left;
+        mouseY = e.clientY - rect.top;
+      });
+
+      initColors();
+      initParticles();
+
+      // Initialize particle controls visibility
+      if (mode === "particles") {
+        particleControls.style.display = "flex";
+      }
+
+      function initAudio() {
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 2048;
+          bufferLen = analyser.frequencyBinCount;
+          dataArray = new Uint8Array(bufferLen);
+        }
+      }
+
+      function draw() {
+        animId = requestAnimationFrame(draw);
+        analyser.getByteTimeDomainData(dataArray);
+
+        ctx.fillStyle = "rgba(10,10,15,0.1)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        if (mode === "wave") {
+          ctx.lineWidth = 2;
+
+          if (useGradient) {
+            const grad = ctx.createLinearGradient(0, 0, canvas.width, 0);
+            colors.forEach((c, idx) => {
+              grad.addColorStop(idx / (colors.length - 1), c);
+            });
+            ctx.strokeStyle = grad;
+            ctx.shadowColor = colors[0];
+          } else {
+            ctx.strokeStyle = colors[0];
+            ctx.shadowColor = colors[0];
+          }
+
+          ctx.shadowBlur = 15;
+          ctx.beginPath();
+          const sliceWidth = canvas.width / bufferLen;
+          let x = 0;
+          for (let i = 0; i < bufferLen; i++) {
+            const y = ((dataArray[i] / 128.0) * canvas.height) / 2;
+            i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            x += sliceWidth;
+          }
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+        } else if (mode === "bars") {
+          analyser.getByteFrequencyData(dataArray);
+          const barW = canvas.width / 128;
+          for (let i = 0; i < 128; i++) {
+            const h = (dataArray[i] / 255) * canvas.height;
+            const y = canvas.height - h;
+
+            if (useGradient) {
+              const grad = ctx.createLinearGradient(0, y, 0, canvas.height);
+              colors.forEach((c, idx) => {
+                grad.addColorStop(idx / (colors.length - 1), c);
+              });
+              ctx.fillStyle = grad;
+            } else {
+              ctx.fillStyle = colors[i % colors.length];
+            }
+            ctx.fillRect(i * barW, y, barW - 1, h);
+          }
+        } else if (mode === "circle") {
+          analyser.getByteFrequencyData(dataArray);
+          const cx = canvas.width / 2;
+          const cy = canvas.height / 2;
+          const r = Math.min(cx, cy) * 0.6;
+          for (let i = 0; i < 180; i++) {
+            const angle = (i / 180) * Math.PI * 2;
+            const h = (dataArray[i] / 255) * r;
+            const x1 = cx + Math.cos(angle) * r;
+            const y1 = cy + Math.sin(angle) * r;
+            const x2 = cx + Math.cos(angle) * (r + h);
+            const y2 = cy + Math.sin(angle) * (r + h);
+
+            if (useGradient) {
+              // Map i to color array with smooth interpolation
+              const colorPos = (i / 180) * (colors.length - 1);
+              const colorIdx = Math.floor(colorPos);
+              const nextIdx = Math.min(colorIdx + 1, colors.length - 1);
+              const blend = colorPos - colorIdx;
+
+              // Simple color interpolation
+              const c1 = colors[colorIdx];
+              const c2 = colors[nextIdx];
+              ctx.strokeStyle = c1; // Use base color (full interpolation would be more complex)
+            } else {
+              ctx.strokeStyle = colors[i % colors.length];
+            }
+            ctx.lineWidth = 2;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = ctx.strokeStyle;
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+          }
+          ctx.shadowBlur = 0;
+        } else if (mode === "particles") {
+          analyser.getByteFrequencyData(dataArray);
+          const avg = dataArray.reduce((a, b) => a + b) / bufferLen;
+          const intensity = particleSettings.interactive ? avg / 255 : 0.5;
+
+          particles.forEach((p, i) => {
+            // Mouse follow behavior
+            if (particleSettings.followMouse) {
+              const dx = mouseX - p.x;
+              const dy = mouseY - p.y;
+              const dist = Math.sqrt(dx * dx + dy * dy);
+              if (dist > 5) {
+                p.x += (dx / dist) * 0.5;
+                p.y += (dy / dist) * 0.5;
+              }
+            }
+
+            // Normal movement
+            const speed = particleSettings.interactive ? 1 + intensity * 2 : 1;
+            p.x += p.vx * speed;
+            p.y += p.vy * speed;
+
+            if (p.x < 0) p.x = canvas.width;
+            if (p.x > canvas.width) p.x = 0;
+            if (p.y < 0) p.y = canvas.height;
+            if (p.y > canvas.height) p.y = 0;
+
+            const size = particleSettings.interactive
+              ? p.radius * (1 + intensity * 2)
+              : p.radius;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
+            ctx.fillStyle = p.color;
+            ctx.shadowBlur = particleSettings.interactive ? 15 * intensity : 5;
+            ctx.shadowColor = p.color;
+            ctx.fill();
+
+            // Draw connections
+            if (particleSettings.connections) {
+              for (let j = i + 1; j < particles.length; j++) {
+                const other = particles[j];
+                const dx = p.x - other.x;
+                const dy = p.y - other.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const maxDist = particleSettings.interactive
+                  ? 100 * intensity
+                  : 50;
+
+                if (dist < maxDist) {
+                  ctx.beginPath();
+                  ctx.moveTo(p.x, p.y);
+                  ctx.lineTo(other.x, other.y);
+
+                  if (useGradient) {
+                    const grad = ctx.createLinearGradient(
+                      p.x,
+                      p.y,
+                      other.x,
+                      other.y,
+                    );
+                    const alpha = 0.3 * (1 - dist / maxDist);
+                    grad.addColorStop(
+                      0,
+                      p.color +
+                        Math.floor(alpha * 255)
+                          .toString(16)
+                          .padStart(2, "0"),
+                    );
+                    grad.addColorStop(
+                      1,
+                      other.color +
+                        Math.floor(alpha * 255)
+                          .toString(16)
+                          .padStart(2, "0"),
+                    );
+                    ctx.strokeStyle = grad;
+                  } else {
+                    ctx.strokeStyle = `rgba(0, 255, 255, ${0.2 * (1 - dist / maxDist)})`;
+                  }
+
+                  ctx.lineWidth = 1;
+                  ctx.stroke();
+                }
+              }
+            }
+          });
+          ctx.shadowBlur = 0;
+        }
+      }
+
+      function cleanup() {
+        if (animId) cancelAnimationFrame(animId);
+        if (audio) {
+          audio.pause();
+          audio = null;
+        }
+        if (micStream) {
+          micStream.getTracks().forEach((t) => t.stop());
+          micStream = null;
+        }
+        if (source) {
+          source.disconnect();
+          source = null;
+        }
+        ctx.fillStyle = "#0a0a0f";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        playBtn.disabled = true;
+        stopBtn.disabled = true;
+        micBtn.textContent = "MIC";
+        isPlaying = false;
+      }
+
+      micBtn.onclick = function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (micStream) {
+          cleanup();
+          return false;
+        }
+
+        navigator.mediaDevices
+          .getUserMedia({ audio: true })
+          .then(function (stream) {
+            initAudio();
+            micStream = stream;
+            source = audioCtx.createMediaStreamSource(stream);
+            source.connect(analyser);
+            draw();
+            micBtn.textContent = "STOP MIC";
+            stopBtn.disabled = false;
+          })
+          .catch(function (e) {
+            alert("Mic access denied");
+          });
+
+        return false;
+      };
+
+      fileBtn.onclick = function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        fileInput.click();
+        return false;
+      };
+
+      fileInput.onchange = function (e) {
+        e.preventDefault();
+        const file = e.target.files[0];
+        if (!file) return false;
+
+        cleanup();
+        initAudio();
+
+        audio = new Audio();
+        audio.src = URL.createObjectURL(file);
+        source = audioCtx.createMediaElementSource(audio);
+        source.connect(analyser);
+        analyser.connect(audioCtx.destination);
+
+        audio.play();
+        draw();
+        isPlaying = true;
+
+        playBtn.disabled = false;
+        stopBtn.disabled = false;
+        playBtn.textContent = "PAUSE";
+
+        e.target.value = "";
+        return false;
+      };
+
+      playBtn.onclick = function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (!audio) return false;
+        if (isPlaying) {
+          audio.pause();
+          isPlaying = false;
+          playBtn.textContent = "PLAY";
+        } else {
+          audio.play();
+          isPlaying = true;
+          playBtn.textContent = "PAUSE";
+        }
+        return false;
+      };
+
+      stopBtn.onclick = function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        cleanup();
+        return false;
+      };
+
+      modeSelect.onchange = function (e) {
+        mode = this.value;
+        console.log("Mode changed to:", mode);
+        if (mode === "particles") {
+          initParticles();
+          particleControls.style.display = "flex";
+          console.log("Particle controls shown");
+        } else {
+          particleControls.style.display = "none";
+          console.log("Particle controls hidden");
+        }
+      };
+
+      gradientCheck.onchange = function () {
+        useGradient = this.checked;
+      };
+
+      addColorBtn.onclick = function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const randomColor =
+          "#" +
+          Math.floor(Math.random() * 16777215)
+            .toString(16)
+            .padStart(6, "0");
+        colors.push(randomColor);
+        createColorPicker(randomColor);
+        if (mode === "particles") initParticles();
+        return false;
+      };
+
+      particleInteractive.onchange = function () {
+        particleSettings.interactive = this.checked;
+      };
+
+      particleConnections.onchange = function () {
+        particleSettings.connections = this.checked;
+      };
+
+      particleMouse.onchange = function () {
+        particleSettings.followMouse = this.checked;
+      };
+
+      particleCount.oninput = function () {
+        particleSettings.count = parseInt(this.value);
+        particleCountLabel.textContent = this.value;
+        if (mode === "particles") initParticles();
+      };
+
+      console.log("Script loaded successfully");
+    </script>
+  </body>
+</html>
